@@ -5,17 +5,15 @@ import json
 import logging
 import pprint
 
-from hashlib import md5
 from werkzeug import urls
 import requests
 
 from odoo import api, fields, models, _
-from odoo.tools.float_utils import float_compare
 from odoo.addons.payment_nelo.controllers.main import NeloController
 from odoo.addons.payment.models.payment_acquirer import ValidationError
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
-
 
 class PaymentAcquirer(models.Model):
     _inherit = 'payment.acquirer'
@@ -34,7 +32,7 @@ class PaymentAcquirer(models.Model):
         if self.state == 'enabled': #prod
             return {
                 'web_url': self._nelo_redirect_url,
-                'rest_url': 'https://api-v2-dev.nelo.co/v1'
+                'rest_url': 'https://api-v2.nelo.co/v1'
             }
         else:
             return {
@@ -66,12 +64,12 @@ class PaymentAcquirer(models.Model):
                     "street": values['partner_address'],
                     "interiorNumber": '',
                     "city": values['partner_city'],
-                    "delegation": "Cuauhtemoc",
+                    "delegation": '',
                     "state": values.get('partner_state') and (values.get('partner_state').code or values.get('partner_state').name) or '',
-                    "colony": 'Juarez',
+                    "colony": '',
                     "postalCode": values['partner_zip']
                 },
-                "countryIso2": "MX"
+                "countryIso2": 'MX'
             }
         },
         "redirectConfirmUrl": urls.url_join(self.get_base_url(), NeloController._confirm_url),
@@ -81,12 +79,19 @@ class PaymentAcquirer(models.Model):
             'Authorization': 'Bearer %s' % (self.nelo_merchant_secret),
             'Content-Type': 'application/json'
         }
-        _logger.info('Payload\n %s', pprint.pformat(payload))  # debug
 
+        _logger.info('Payload %s' % payload)
         url = '%s/checkout' % (self._get_nelo_urls()['rest_url'])
         response = requests.request("POST", url, headers=headers, data=payload)
-        response.raise_for_status()
+        _logger.info(response)
+        self._handle_http_response_errors(response)
         self._nelo_redirect_url = response.json()['redirectUrl']
+
+    def _handle_http_response_errors(self, http_response):
+        if http_response.status_code >= 400:
+            content = http_response.json() if http_response.text else ''
+            _logger.info('Nelo: response (%s)\n%s' % (http_response, content))
+            raise UserError(_('Please contact support.'))
 
     def nelo_form_generate_values(self, values):
         self._set_redirect_url(values)
@@ -95,7 +100,6 @@ class PaymentAcquirer(models.Model):
     def nelo_get_form_action_url(self):
         self.ensure_one()
         return self._get_nelo_urls()['web_url']
-
 
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
@@ -107,20 +111,19 @@ class PaymentTransaction(models.Model):
         if not reference:
             _logger.info('Nelo: received data with missing reference/order_id (%s)' % (reference))
             raise ValidationError(_('Nelo: received data with missing reference (%s)') % (reference))
-
+        
         txs = self.env['payment.transaction'].search([('reference', '=', reference)])
-        if not txs or len(txs) > 1:
-            error_msg = _('Nelo: received data for reference %s') % (reference)
-            logger_msg = 'Nelo: received data for reference %s' % (reference)
-            if not txs:
-                error_msg += _('; no order found')
-                logger_msg += '; no order found'
-            else:
-                error_msg += _('; multiple order found')
-                logger_msg += '; multiple order found'
+        if not txs:
+            error_msg = _('Nelo: received data for reference %s; no order found.') % (reference)
+            logger_msg = 'Nelo: received data for reference %s; no order found.' % (reference)
             _logger.info(logger_msg)
             raise ValidationError(error_msg)
-
+        if  len(txs) > 1:
+            error_msg = _('Nelo: received data for reference %s; multiple order found.') % (reference)
+            logger_msg = 'Nelo: received data for reference %s; multiple order found.' % (reference)
+            _logger.info(logger_msg)
+            raise ValidationError(error_msg)
+        
         return txs
 
     def _nelo_form_validate(self, data):
@@ -137,4 +140,3 @@ class PaymentTransaction(models.Model):
         self.write(payload)
         self.execute_callback()
         return True
-       

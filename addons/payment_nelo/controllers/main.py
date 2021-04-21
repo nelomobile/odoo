@@ -7,11 +7,10 @@ import logging
 import requests
 import werkzeug
 
-from odoo import http
+from odoo import http, _
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)
-
 
 class NeloController(http.Controller):
     _confirm_url = '/payment/nelo/confirm'
@@ -23,21 +22,22 @@ class NeloController(http.Controller):
         if claims.get('order_id'):
             acquirer = request.env['payment.acquirer'].sudo().search([('provider', '=', 'nelo')])
             payload = json.dumps({
-                'checkoutToken': post['checkoutToken']
+                'checkoutToken': 'a%s' % post['checkoutToken']
             })
             headers = {
                 'Authorization': 'Bearer %s' % (acquirer.nelo_merchant_secret),
                 'Content-Type': 'application/json'
             }
-            url = '%s/charge/auth' % (acquirer._get_nelo_urls()['rest_url'])
-            response = requests.request("POST", url, headers=headers, data=payload)
-            _logger.info('Response for url %s\n %s\n', url, response)  # debug
-            response.raise_for_status()
-
-            url = '%s/charge/capture' % (acquirer._get_nelo_urls()['rest_url'])
-            response = requests.request("POST", url, headers=headers, data=payload)
-            _logger.info('Response for url %s\n %s\n', url, response)  # debug
-            response.raise_for_status()
+            try:
+                url = '%s/charge/auth' % (acquirer._get_nelo_urls()['rest_url'])
+                response = requests.request("POST", url, headers=headers, data=payload)
+                response.raise_for_status()
+                url = '%s/charge/capture' % (acquirer._get_nelo_urls()['rest_url'])
+                response = requests.request("POST", url, headers=headers, data=payload)
+                response.raise_for_status()
+            except:
+                request.env['payment.transaction'].sudo().search([('reference', '=', claims.get('order_id'))])._set_transaction_error(_('Request rejected by Nelo.'))
+                return False
             
             data = {
                 'reference': claims.get('order_id')
@@ -46,10 +46,14 @@ class NeloController(http.Controller):
         return False
     
     def _get_claims(self, checkoutToken):
-        claims_base64 = checkoutToken.split(".")[1]
-        claims_base64 += "=" * ((4 - len(claims_base64) % 4) % 4) # add padding
-        claims_bytes = base64.b64decode(claims_base64, validate=False)
-        return json.loads(claims_bytes.decode('ascii'))
+        try:
+            claims_base64 = checkoutToken.split(".")[1]
+            claims_base64 += "=" * ((4 - len(claims_base64) % 4) % 4) # add padding
+            claims_bytes = base64.b64decode(claims_base64, validate=False)
+            return json.loads(claims_bytes.decode('ascii'))
+        except:
+            return json.loads('{}')
+        
 
     @http.route('/payment/nelo/confirm', type='http', auth="public", methods=['GET', 'POST'], csrf=False)
     def nelo_return(self, **post):
