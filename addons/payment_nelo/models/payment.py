@@ -80,17 +80,18 @@ class PaymentAcquirer(models.Model):
             'Content-Type': 'application/json'
         }
 
-        _logger.info('Payload %s' % payload)
         url = '%s/checkout' % (self._get_nelo_urls()['rest_url'])
         response = requests.request("POST", url, headers=headers, data=payload)
-        _logger.info(response)
+        _logger.info('Nelo - url requested %s' % url)
+        _logger.info('Nelo - response %s' % response)
+        
         self._handle_http_response_errors(response)
         self._nelo_redirect_url = response.json()['redirectUrl']
 
     def _handle_http_response_errors(self, http_response):
         if http_response.status_code >= 400:
             content = http_response.json() if http_response.text else ''
-            _logger.info('Nelo: response (%s)\n%s' % (http_response, content))
+            _logger.info('Nelo - error response (%s)\n%s' % (http_response, content))
             raise UserError(_('Please contact support.'))
 
     def nelo_form_generate_values(self, values):
@@ -109,18 +110,18 @@ class PaymentTransaction(models.Model):
         reference = data.get('reference')
 
         if not reference:
-            _logger.info('Nelo: received data with missing reference/order_id (%s)' % (reference))
+            _logger.info('Nelo - received data with missing reference/order_id (%s)' % (reference))
             raise ValidationError(_('Nelo: received data with missing reference (%s)') % (reference))
         
         txs = self.env['payment.transaction'].search([('reference', '=', reference)])
         if not txs:
             error_msg = _('Nelo: received data for reference %s; no order found.') % (reference)
-            logger_msg = 'Nelo: received data for reference %s; no order found.' % (reference)
+            logger_msg = 'Nelo - received data for reference %s; no order found.' % (reference)
             _logger.info(logger_msg)
             raise ValidationError(error_msg)
         if  len(txs) > 1:
             error_msg = _('Nelo: received data for reference %s; multiple order found.') % (reference)
-            logger_msg = 'Nelo: received data for reference %s; multiple order found.' % (reference)
+            logger_msg = 'Nelo - received data for reference %s; multiple order found.' % (reference)
             _logger.info(logger_msg)
             raise ValidationError(error_msg)
         
@@ -128,15 +129,15 @@ class PaymentTransaction(models.Model):
 
     def _nelo_form_validate(self, data):
         if self.state in ['done']:
-            _logger.info('Nelo: trying to validate an already validated tx (ref %s)', self.reference)
+            _logger.info('Nelo - trying to validate an already validated tx (ref %s)', self.reference)
             return True
 
         payload = {
             'acquirer_reference': data.get('reference'),
             'date': fields.Datetime.now()
         }
-        _logger.info('Validated Nelo payment for tx %s: set as done' % (self.reference))
         self._set_transaction_done()
         self.write(payload)
+        _logger.info('Nelo - validated payment for tx %s: set as done' % (self.reference))
         self.execute_callback()
         return True

@@ -22,7 +22,7 @@ class NeloController(http.Controller):
         if claims.get('order_id'):
             acquirer = request.env['payment.acquirer'].sudo().search([('provider', '=', 'nelo')])
             payload = json.dumps({
-                'checkoutToken': 'a%s' % post['checkoutToken']
+                'checkoutToken': post['checkoutToken']
             })
             headers = {
                 'Authorization': 'Bearer %s' % (acquirer.nelo_merchant_secret),
@@ -31,9 +31,13 @@ class NeloController(http.Controller):
             try:
                 url = '%s/charge/auth' % (acquirer._get_nelo_urls()['rest_url'])
                 response = requests.request("POST", url, headers=headers, data=payload)
+                _logger.info('Nelo - url requested %s' % url)
+                _logger.info('Nelo - response: %s' % response)
                 response.raise_for_status()
                 url = '%s/charge/capture' % (acquirer._get_nelo_urls()['rest_url'])
                 response = requests.request("POST", url, headers=headers, data=payload)
+                _logger.info('Nelo - url requested %s' % url)
+                _logger.info('Nelo - response: %s' % response)
                 response.raise_for_status()
             except:
                 request.env['payment.transaction'].sudo().search([('reference', '=', claims.get('order_id'))])._set_transaction_error(_('Request rejected by Nelo.'))
@@ -52,6 +56,7 @@ class NeloController(http.Controller):
             claims_bytes = base64.b64decode(claims_base64, validate=False)
             return json.loads(claims_bytes.decode('ascii'))
         except:
+            _logger.info('Nelo - error %s' % err)
             return json.loads('{}')
         
 
